@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name = "serde-scene"
+version = "0.1.0"
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true

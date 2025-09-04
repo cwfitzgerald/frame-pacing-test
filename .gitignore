@@ -1,0 +1,12 @@
+/target
+*.pyc
+__pycache__
+*.blend[1-9]
+
+# nsight keeps adding this back :)
+imgui.ini
+
+# mac crap
+.DS_Store
+._.DS_Store
+.*.blend

@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name = "common"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+anyhow.workspace = true
+egui.workspace = true
+glam.workspace = true
+hecs.workspace = true
+log.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+sdl2.workspace = true
+tracy-client.workspace = true
+windows = { workspace = true, features = ["Win32_System_Performance"] }

@@ -1,0 +1,14 @@
+[package]
+edition = "2021"
+name = "systems"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+common.workspace = true
+components.workspace = true
+serde-scene.workspace = true
+
+egui.workspace = true
+glam.workspace = true
+tracy-client.workspace = true

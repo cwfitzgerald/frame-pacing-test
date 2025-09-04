@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name = "components"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true

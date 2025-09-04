@@ -1,0 +1,19 @@
+# The slang extension for vscode forces clang-format to pretend all
+# slang files are C# files. This allows you to call clang-format directly.
+#
+# https://github.com/shader-slang/slang/blob/80c18515df8376efe97e4c93492e0f6c4cc44af7/source/slang/slang-language-server-auto-format.cpp#L238-L239
+Language: CSharp
+
+BasedOnStyle: Microsoft
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBraces: Attach
+IndentCaseBlocks: true
+IndentCaseLabels: true
+IndentWidth: 4
+InsertBraces: true
+InsertTrailingCommas: Wrapped
+NamespaceIndentation: All
+RemoveSemicolon: true
+PointerAlignment: Left

@@ -1,0 +1,6 @@
+[default.extend-identifiers]
+LOD = "LOD"
+
+[default.extend-words]
+LOD = "LOD"
+Fo = "Fo"

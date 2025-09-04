@@ -1,0 +1,90 @@
+[workspace]
+members = [".", "crates/*"]
+
+[workspace.dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+arrayvec = "0.7.6"
+bytemuck = { version = "1.16.0", features = ["derive"] }
+camino = "1"
+ddsfile = "0.5.2"
+egui = "0.29"
+env_logger = { version = "0.11.3", default-features = false, features = [
+    "auto-color",
+    "color",
+    "humantime",
+] }
+epaint = { version = "0.29", features = ["bytemuck"] }
+flume = { version = "0.11.0", default-features = false }
+glam = { version = "0.29.0", features = [
+    "bytemuck",
+    "debug-glam-assert",
+    "serde",
+] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils"] }
+gpu-allocator = { version = "0.27.0", default-features = false, features = [
+    "d3d12",
+] }
+hecs = "0.10"
+ktx2 = "0.3.0"
+log = "0.4.21"
+offset-allocator = "0.2.0"
+once_cell = { version = "1.20", features = ["parking_lot"] }
+parking_lot = "0.12.2"
+pico-args = "0.5"
+raw-window-handle = { version = "0.6.0", features = ["std"] }
+rayon = "1.10.0"
+sdl2 = { version = "0.37.0", features = ["raw-window-handle"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracy-client = { version = "0.17.0", default-features = false }
+windows = { version = "0.58.0", features = [] }
+
+common = { version = "0.1.0", path = "crates/common" }
+components = { version = "0.1.0", path = "crates/components" }
+render = { version = "0.1.0", path = "crates/render" }
+serde-scene = { version = "0.1.0", path = "crates/serde-scene" }
+systems = { version = "0.1.0", path = "crates/systems" }
+
+[patch.crates-io]
+tracy-client = { git = "https://github.com/Timbals/rust_tracy_client.git", rev = "9f4c7d7" }
+
+[package]
+edition = "2021"
+name = "fantasy-rail"
+publish = false
+version = "0.1.0"
+
+[features]
+tracy = ["tracy-client/enable"]
+
+[dependencies]
+common.workspace = true
+components.workspace = true
+render.workspace = true
+serde-scene.workspace = true
+systems.workspace = true
+
+anyhow = { workspace = true, features = ["backtrace"] }
+env_logger.workspace = true
+glam.workspace = true
+log.workspace = true
+raw-window-handle.workspace = true
+sdl2.workspace = true
+tracy-client = { workspace = true, features = [
+    "broadcast",
+    "callstack-inlines",
+    "code-transfer",
+    "context-switch-tracing",
+    "flush-on-exit",
+    "sampling",
+    "system-tracing",
+] }
+windows = { workspace = true, features = [] }
+pico-args = { workspace = true, features = ["eq-separator"] }
+
+[profile.release]
+debug = true
+
+[build-dependencies]
+camino = "1"
+embed-manifest = "1.4.0"
