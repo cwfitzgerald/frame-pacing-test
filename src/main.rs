@@ -61,17 +61,43 @@ fn display_error(clipboard: &ClipboardUtil, error: anyhow::Error) -> ! {
     std::process::exit(1);
 }
 
+const HELP: &str = "\
+Usage: frame-pacing-test [options]
+Options:
+    --adapter <n>      Use the n-th adapter (default 0)
+    --dcomp            Use IPresentationManager for presentation instead of DXGI.
+    --fullscreen       Start in fullscreen mode.
+    --target           Target frame rate (default 40).
+
+    -h                 Show this help message.
+";
+
 fn inner_main(sdl_context: &Sdl, video_subsystem: &VideoSubsystem) -> anyhow::Result<()> {
+    let mut args = pico_args::Arguments::from_env();
+    let use_adapter: u32 = args.opt_value_from_str("--adapter")?.unwrap_or(0);
+    let use_dcomp = args.contains("--dcomp");
+    let fullscreen = args.contains("--fullscreen");
+    let target_frame_rate: f32 = args.opt_value_from_str("--target")?.unwrap_or(40.0);
+    let help = args.contains("-h");
+
+    if help {
+        println!("{HELP}");
+        return Ok(());
+    }
+
     let mouse = sdl_context.mouse();
     let window = {
         let _span = tracy_client::span!("Create Window");
 
-        video_subsystem
-            .window("Fantasy Rail", 1280, 720)
-            .resizable()
-            .fullscreen_desktop()
-            .build()
-            .unwrap()
+        let mut builder = video_subsystem.window("Frame Pacing", 1280, 720);
+
+        builder.resizable();
+
+        if fullscreen {
+            builder.fullscreen_desktop();
+        }
+
+        builder.build().context("Failed to create window")?
     };
 
     let mut relative_mode = true;
@@ -83,17 +109,12 @@ fn inner_main(sdl_context: &Sdl, video_subsystem: &VideoSubsystem) -> anyhow::Re
         anyhow::bail!("Unsupported platform!");
     };
 
-    let mut args = pico_args::Arguments::from_env();
-
-    let use_adapter: u32 = args.opt_value_from_str("--adapter")?.unwrap_or(0);
-
-    let use_dcomp = args.contains("--dcomp");
-
     let mut renderer = render::Renderer::new(
         HWND(handle.hwnd.get() as _),
         UVec2::from(window.size()),
         use_dcomp,
         use_adapter,
+        target_frame_rate,
     )?;
 
     let mut game = common::Game::new(String::from("scene"));

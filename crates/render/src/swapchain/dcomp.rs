@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, ffi::c_void, mem, ptr, time::Duration};
+use std::{
+    collections::VecDeque,
+    ffi::c_void,
+    mem, ptr,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
@@ -20,7 +25,6 @@ use windows::{
 };
 
 use crate::{query, swapchain::Swapchain, util::SmartNtHandle};
-
 const BUFFER_COUNT: usize = 3;
 
 struct InteropFence {
@@ -185,6 +189,8 @@ pub struct DCompSwapchain {
     buffers: ArrayVec<PresentationBuffer, BUFFER_COUNT>,
     supports_displayable_textures: bool,
 
+    frame_duration_100ns: u64,
+
     tracy_context: tracy_client::GpuContext,
     queries: VecDeque<Query>,
 
@@ -200,6 +206,7 @@ pub struct DCompSwapchain {
 
     start_time: Option<u64>,
     previous_recorded_time: u64,
+    previous_wait_time: Instant,
 }
 
 impl DCompSwapchain {
@@ -209,8 +216,11 @@ impl DCompSwapchain {
         d3d12_queue: &ID3D12CommandQueue,
         hwnd: HWND,
         size: UVec2,
+        target_frame_rate: f32,
     ) -> anyhow::Result<Self> {
         unsafe {
+            DCompositionBoostCompositorClock(true).unwrap();
+
             let mut d3d11_device = None;
             let mut d3d11_context = None;
             D3D11CreateDevice(
@@ -372,6 +382,8 @@ impl DCompSwapchain {
 
             let present_index = presentation_manager.GetNextPresentId();
 
+            let frame_duration_100ns = (10_000_000.0 / target_frame_rate).round() as u64; // 100 ns units
+
             Ok(Self {
                 d3d11_device,
                 d3d11_context,
@@ -384,6 +396,7 @@ impl DCompSwapchain {
                 tracy_context,
                 queries: VecDeque::new(),
                 buffers,
+                frame_duration_100ns,
                 interop_state,
                 retiring_fence,
                 lost_event,
@@ -392,6 +405,7 @@ impl DCompSwapchain {
                 buffer_index: 0,
                 start_time: None,
                 previous_recorded_time: 0,
+                previous_wait_time: Instant::now(),
             })
         }
     }
@@ -402,8 +416,9 @@ impl DCompSwapchain {
                 let id = stats.GetPresentId();
                 let kind = stats.GetKind();
 
-                let original_target =
-                    Duration::from_nanos((self.start_time.unwrap() + 166_667 * id) * 100);
+                let original_target = Duration::from_nanos(
+                    (self.start_time.unwrap() + self.frame_duration_100ns * id) * 100,
+                );
 
                 #[allow(non_upper_case_globals)]
                 match kind {
@@ -417,21 +432,54 @@ impl DCompSwapchain {
                             &mut display_instance_array_ptr,
                         );
 
-                        let display_instance_array = std::slice::from_raw_parts(
+                        let _display_instance_array = std::slice::from_raw_parts(
                             display_instance_array_ptr,
                             display_instance_array_count as usize,
                         );
 
                         let composition_frame_id = stats.GetCompositionFrameId();
-                        let content_tag = stats.GetContentTag();
+
+                        let mut frame_stats = COMPOSITION_FRAME_STATS::default();
+                        let mut target_ids = [COMPOSITION_TARGET_ID::default(); 8];
+                        let mut target_id_count = 0;
+
+                        DCompositionGetStatistics(
+                            composition_frame_id,
+                            &mut frame_stats,
+                            target_ids.len() as _,
+                            Some(target_ids.as_mut_ptr()),
+                            Some(&mut target_id_count),
+                        )
+                        .unwrap();
+
+                        let mut target_stats = [COMPOSITION_TARGET_STATS::default(); 8];
+                        for i in 0..target_id_count as usize {
+                            DCompositionGetTargetStatistics(
+                                composition_frame_id,
+                                &target_ids[i],
+                                &mut target_stats[i],
+                            )
+                            .unwrap();
+                        }
+
+                        let previous_time = self.previous_recorded_time;
+                        self.previous_recorded_time = frame_stats.targetTime;
+
+                        let previous_time = Duration::from_nanos(previous_time * 100);
+                        let target_time = Duration::from_nanos(frame_stats.targetTime * 100);
+
+                        let diff = if target_time > original_target {
+                            format!("+{:?}", target_time - original_target)
+                        } else {
+                            format!("-{:?}", original_target - target_time)
+                        };
 
                         log::info!(
-                        "Presentation {}: Composition Frame {}, Content Tag {}, Display instance {:?}",
-                        id,
-                        composition_frame_id,
-                        content_tag,
-                        display_instance_array
-                    );
+                            "Presentation {}: CompFrame: {} Sch: {original_target:?} Tar: {target_time:?} (diff {diff}), Delta Tar: {:?}",
+                            id,
+                            composition_frame_id,
+                            target_time - previous_time
+                        );
                     }
                     PresentStatisticsKind_IndependentFlipFrame => {
                         let stats: IIndependentFlipFramePresentStatistics = stats.cast().unwrap();
@@ -516,7 +564,8 @@ impl Swapchain for DCompSwapchain {
         }
 
         unsafe {
-            let target_time = self.start_time.unwrap() + 166_667 * self.present_index; // 16.667 ms in 100 ns units
+            let target_time =
+                self.start_time.unwrap() + self.frame_duration_100ns * self.present_index; // 16.667 ms in 100 ns units
 
             // let duration_until_target: Duration =
             //     Duration::from_nanos(target_time.saturating_sub(now).saturating_mul(100));
@@ -537,6 +586,18 @@ impl Swapchain for DCompSwapchain {
             let previous_present_id = buffer.previous_present_id;
 
             self.wait_for_present(previous_present_id);
+
+            let now = Instant::now();
+            let previous_wait_time = self.previous_wait_time;
+            self.previous_wait_time = now;
+
+            let diff = now.duration_since(previous_wait_time);
+
+            log::info!(
+                "Waited {:?} since last acquire (should be ~{:?})",
+                diff,
+                Duration::from_nanos(self.frame_duration_100ns * 100)
+            );
 
             self.display_stats();
 
@@ -572,7 +633,7 @@ impl Swapchain for DCompSwapchain {
             self.presentation_surface.SetBuffer(&buffer.buffer).unwrap();
             self.presentation_manager
                 .SetPreferredPresentDuration(
-                    SystemInterruptTime { value: 166_667 },
+                    SystemInterruptTime { value: self.frame_duration_100ns },
                     SystemInterruptTime { value: 0 },
                 )
                 .unwrap();

@@ -182,6 +182,7 @@ impl Renderer {
         size: glam::UVec2,
         use_dcomp: bool,
         use_adapter: u32,
+        target_frame_rate: f32,
     ) -> anyhow::Result<Self> {
         unsafe {
             let _span = tracy_client::span!("Renderer::new");
@@ -432,6 +433,7 @@ impl Renderer {
                     &graphics_command_queue,
                     hwnd,
                     size,
+                    target_frame_rate,
                 )?)
             } else {
                 Box::new(DXGISwapchain::new(&factory, &graphics_command_queue, hwnd, size)?)
