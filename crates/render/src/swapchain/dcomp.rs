@@ -432,7 +432,7 @@ impl DCompSwapchain {
                             &mut display_instance_array_ptr,
                         );
 
-                        let _display_instance_array = std::slice::from_raw_parts(
+                        let display_instance_array = std::slice::from_raw_parts(
                             display_instance_array_ptr,
                             display_instance_array_count as usize,
                         );
@@ -474,11 +474,29 @@ impl DCompSwapchain {
                             format!("-{:?}", original_target - target_time)
                         };
 
+                        let xadapter = if display_instance_array[0].requiredCrossAdapterCopy == 1 {
+                            "(cross-adapter)"
+                        } else {
+                            ""
+                        };
+
+                        let vblank_duration =
+                            Duration::from_nanos(target_stats[0].vblankDuration * 100);
+
+                        let comp_frequency = Duration::from_nanos(frame_stats.framePeriod * 100);
+
+                        let no_iflip =
+                            if self.supports_displayable_textures { "" } else { " (no iFlip)" };
+
                         log::info!(
-                            "Presentation {}: CompFrame: {} Sch: {original_target:?} Tar: {target_time:?} (diff {diff}), Delta Tar: {:?}",
+                            "Presentation {}: CompFrame: {} {xadapter}{no_iflip}\
+                             Sch: {original_target:?} Tar: {target_time:?} (diff {diff}), \
+                             Delta Tar: {:?}, VBlank: {:?}, Comp Feq: {:?}",
                             id,
                             composition_frame_id,
-                            target_time - previous_time
+                            target_time - previous_time,
+                            vblank_duration,
+                            comp_frequency,
                         );
                     }
                     PresentStatisticsKind_IndependentFlipFrame => {
