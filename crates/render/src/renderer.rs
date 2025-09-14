@@ -208,6 +208,8 @@ impl Renderer {
             let factory: IDXGIFactory7 =
                 CreateDXGIFactory2(factory_flags).context("Failed to create DXGI factory")?;
 
+            super::swapchain::enumerate_display_info(&factory);
+
             let mut adapter_idx = 0;
             let mut adapters = Vec::new();
             while let Ok(adapter) = factory.EnumAdapterByGpuPreference::<IDXGIAdapter4>(
@@ -436,7 +438,13 @@ impl Renderer {
                     target_frame_rate,
                 )?)
             } else {
-                Box::new(DXGISwapchain::new(&factory, &graphics_command_queue, hwnd, size)?)
+                Box::new(DXGISwapchain::new(
+                    &factory,
+                    &graphics_command_queue,
+                    hwnd,
+                    size,
+                    target_frame_rate,
+                )?)
             };
 
             let query_contexts =
@@ -780,7 +788,7 @@ impl Renderer {
             // Wait for idle
             let wait_for_idle_span = tracy_client::span!("Wait for idle");
             self.graphics_command_queue.Signal(&self.graphics_fence, self.fence_value).unwrap();
-            self.graphics_fence.SetEventOnCompletion(self.fence_value, None).unwrap();
+            self.graphics_fence.SetEventOnCompletion(self.fence_value, HANDLE::default()).unwrap();
             drop(wait_for_idle_span);
 
             // Resize the swapchain
@@ -961,7 +969,7 @@ impl Renderer {
 
             let span = tracy_client::span!("Wait for fence");
             log::debug!("CPU Waiting on fence {}", frame.fence_value);
-            self.graphics_fence.SetEventOnCompletion(frame.fence_value, None).unwrap();
+            self.graphics_fence.SetEventOnCompletion(frame.fence_value, HANDLE::default()).unwrap();
             drop(span);
 
             let span = tracy_client::span!("Wait for Swapchain");
@@ -1115,7 +1123,7 @@ impl Renderer {
                 D3D12_CLEAR_FLAG_DEPTH,
                 0.0,
                 0,
-                &[],
+                None,
             );
 
             frame.graphics_command_list.OMSetRenderTargets(
@@ -1186,7 +1194,7 @@ impl Renderer {
             frame.graphics_command_list.OMSetRenderTargets(
                 1,
                 Some(&swapchain.rtv.handle),
-                FALSE,
+                false,
                 None,
             );
 
@@ -1306,7 +1314,7 @@ impl Drop for Renderer {
 
             self.graphics_command_queue.Signal(&self.graphics_fence, self.fence_value).unwrap();
 
-            self.graphics_fence.SetEventOnCompletion(self.fence_value, None).unwrap();
+            self.graphics_fence.SetEventOnCompletion(self.fence_value, HANDLE::default()).unwrap();
 
             // end spans
             for frame in &mut self.frames.frame {

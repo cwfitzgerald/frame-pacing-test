@@ -5,9 +5,11 @@ use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device, ID3
 use crate::renderer::FRAMES_IN_FLIGHT;
 
 mod dcomp;
+mod displays;
 mod dxgi;
 
 pub use dcomp::DCompSwapchain;
+pub use displays::enumerate_display_info;
 pub use dxgi::DXGISwapchain;
 
 pub trait Swapchain {

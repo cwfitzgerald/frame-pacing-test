@@ -145,7 +145,8 @@ impl QueryManager {
         for (i, span) in self.tracy_spans.drain(..).enumerate() {
             let start = mapping[i * 2];
             let end = mapping[i * 2 + 1];
-            span.upload_timestamp(start as i64, end as i64);
+            span.upload_timestamp_start(start as i64);
+            span.upload_timestamp_end(end as i64);
         }
     }
 }

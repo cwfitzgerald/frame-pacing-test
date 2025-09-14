@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Context;
 use arrayvec::ArrayVec;
 use glam::UVec2;
@@ -7,6 +9,12 @@ use windows::{
         Foundation::{HANDLE, HWND, WAIT_OBJECT_0},
         Graphics::{
             Direct3D12::*,
+            DirectComposition::{
+                DCompositionBoostCompositorClock, DCompositionGetFrameId,
+                DCompositionGetStatistics, DCompositionGetTargetStatistics,
+                COMPOSITION_FRAME_ID_COMPLETED, COMPOSITION_FRAME_STATS, COMPOSITION_TARGET_ID,
+                COMPOSITION_TARGET_STATS,
+            },
             Dxgi::{Common::*, *},
         },
         System::Threading::WaitForSingleObject,
@@ -23,6 +31,8 @@ pub struct DXGISwapchain {
     waitable_object: HANDLE,
     buffers: ArrayVec<ID3D12Resource, { FRAMES_IN_FLIGHT }>,
     present_index: u64,
+    previous_frame_time: u64,
+    sleeper: spin_sleep_util::Interval,
 }
 
 impl DXGISwapchain {
@@ -31,7 +41,10 @@ impl DXGISwapchain {
         graphics_command_queue: &ID3D12CommandQueue,
         hwnd: HWND,
         size: UVec2,
+        target_frame_rate: f32,
     ) -> anyhow::Result<Self> {
+        unsafe { DCompositionBoostCompositorClock(true).unwrap() };
+
         let swapchain_desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: size.x,
             Height: size.y,
@@ -68,7 +81,16 @@ impl DXGISwapchain {
                 buffers.push(buffer);
             }
 
-            Ok(Self { swapchain, waitable_object, buffers, present_index: 0 })
+            Ok(Self {
+                swapchain,
+                waitable_object,
+                buffers,
+                present_index: 0,
+                previous_frame_time: 0,
+                sleeper: spin_sleep_util::interval(Duration::from_nanos(
+                    (1_000_000_000.0 / target_frame_rate) as u64,
+                )),
+            })
         }
     }
 }
@@ -111,7 +133,56 @@ impl Swapchain for DXGISwapchain {
     fn acquire(&mut self) {
         let wait_result = unsafe { WaitForSingleObject(self.waitable_object, 5_000) };
 
+        self.sleeper.tick();
+
         assert_eq!(wait_result, WAIT_OBJECT_0, "Failed to wait for swapchain frame latency object");
+
+        let mut dxgi_stats = DXGI_FRAME_STATISTICS::default();
+        unsafe {
+            let _ = self.swapchain.GetFrameStatistics(&mut dxgi_stats);
+        }
+
+        let dxgi_diff = Duration::from_nanos(
+            (dxgi_stats.SyncQPCTime as u64).saturating_sub(self.previous_frame_time) * 100,
+        );
+        self.previous_frame_time = dxgi_stats.SyncQPCTime as u64;
+
+        log::info!("DXGI Frame Duration: {:?}", dxgi_diff);
+
+        unsafe {
+            let composition_frame_id =
+                DCompositionGetFrameId(COMPOSITION_FRAME_ID_COMPLETED).unwrap();
+
+            let mut frame_stats = COMPOSITION_FRAME_STATS::default();
+            let mut target_ids = [COMPOSITION_TARGET_ID::default(); 8];
+            let mut target_id_count = 0;
+
+            DCompositionGetStatistics(
+                composition_frame_id,
+                &mut frame_stats,
+                target_ids.len() as _,
+                Some(target_ids.as_mut_ptr()),
+                Some(&mut target_id_count),
+            )
+            .unwrap();
+
+            let mut target_stats = [COMPOSITION_TARGET_STATS::default(); 8];
+            for i in 0..target_id_count as usize {
+                target_stats[i] =
+                    DCompositionGetTargetStatistics(composition_frame_id, &target_ids[i]).unwrap();
+            }
+
+            for i in 0..target_id_count as usize {
+                let stat = &target_stats[i];
+                let vblank_duration = Duration::from_nanos(stat.vblankDuration * 100);
+
+                log::info!(
+                    "{i} VBlank Duration: {:?}, Outstanding Presents: {}",
+                    vblank_duration,
+                    stat.outstandingPresents,
+                );
+            }
+        }
     }
 
     fn present(&mut self, _d3d12_queue: &ID3D12CommandQueue) {

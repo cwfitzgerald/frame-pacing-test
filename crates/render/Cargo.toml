@@ -23,8 +23,11 @@ hecs.workspace = true
 ktx2.workspace = true
 log.workspace = true
 offset-allocator.workspace = true
+pacy.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
+spin_sleep.workspace = true
+spin_sleep_util.workspace = true
 tracy-client.workspace = true
 windows = { workspace = true, features = [
     "Wdk_System_SystemServices",
@@ -35,7 +38,9 @@ windows = { workspace = true, features = [
     "Win32_Graphics_DirectComposition",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }

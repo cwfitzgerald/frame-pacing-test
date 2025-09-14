@@ -5,10 +5,10 @@ pub fn load_texture(buffer_url: &str) -> crate::TextureDescriptor {
 
     let header = ktx.header();
 
-    let total_data_size = ktx.levels().map(|level| level.len()).sum::<usize>();
+    let total_data_size = ktx.levels().map(|level| level.data.len()).sum::<usize>();
     let mut level_data = Vec::with_capacity(total_data_size);
     for level in ktx.levels() {
-        level_data.extend_from_slice(level);
+        level_data.extend_from_slice(level.data);
     }
 
     let format = match header.format {

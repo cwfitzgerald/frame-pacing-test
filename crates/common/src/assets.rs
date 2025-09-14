@@ -10,7 +10,8 @@ use parking_lot::Mutex;
 
 pub fn load_file(path: &str) -> anyhow::Result<Vec<u8>> {
     let _span = tracy_client::span!("load_file");
-    std::fs::read(format!("assets/{path}")).with_context(|| format!("Failed to read file: {path}"))
+    std::fs::read(format!("{}/../../assets/{path}", env!("CARGO_MANIFEST_DIR")))
+        .with_context(|| format!("Failed to read file: {path}"))
 }
 
 pub struct Asset<T>(Arc<OnceCell<T>>);

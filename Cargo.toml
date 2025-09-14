@@ -15,7 +15,7 @@ env_logger = { version = "0.11.3", default-features = false, features = [
 ] }
 epaint = { version = "0.29", features = ["bytemuck"] }
 flume = { version = "0.11.0", default-features = false }
-glam = { version = "0.29.0", features = [
+glam = { version = "0.30.0", features = [
     "bytemuck",
     "debug-glam-assert",
     "serde",
@@ -23,30 +23,31 @@ glam = { version = "0.29.0", features = [
 gltf = { version = "1.4.1", default-features = false, features = ["utils"] }
 gpu-allocator = { version = "0.27.0", default-features = false, features = [
     "d3d12",
-] }
+    "hashbrown",
+], git = "https://github.com/Traverse-Research/gpu-allocator.git", branch = "windows-69" }
 hecs = "0.10"
-ktx2 = "0.3.0"
+ktx2 = "0.4.0"
 log = "0.4.21"
 offset-allocator = "0.2.0"
 once_cell = { version = "1.20", features = ["parking_lot"] }
+pacy = { git = "https://github.com/cwfitzgerald/pacy.git", rev = "0a3b3996" }
 parking_lot = "0.12.2"
 pico-args = "0.5"
 raw-window-handle = { version = "0.6.0", features = ["std"] }
 rayon = "1.10.0"
-sdl2 = { version = "0.37.0", features = ["raw-window-handle"] }
+sdl2 = { version = "0.38.0", features = ["raw-window-handle"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tracy-client = { version = "0.17.0", default-features = false }
-windows = { version = "0.58.0", features = [] }
+spin_sleep = "1"
+spin_sleep_util = "0.1.1"
+tracy-client = { version = "0.18.0", default-features = false }
+windows = { version = "0.62.0", features = [] }
 
 common = { version = "0.1.0", path = "crates/common" }
 components = { version = "0.1.0", path = "crates/components" }
 render = { version = "0.1.0", path = "crates/render" }
 serde-scene = { version = "0.1.0", path = "crates/serde-scene" }
 systems = { version = "0.1.0", path = "crates/systems" }
-
-[patch.crates-io]
-tracy-client = { git = "https://github.com/Timbals/rust_tracy_client.git", rev = "9f4c7d7" }
 
 [package]
 edition = "2021"
@@ -68,6 +69,7 @@ anyhow = { workspace = true, features = ["backtrace"] }
 env_logger.workspace = true
 glam.workspace = true
 log.workspace = true
+pico-args = { workspace = true, features = ["eq-separator"] }
 raw-window-handle.workspace = true
 sdl2.workspace = true
 tracy-client = { workspace = true, features = [
@@ -80,7 +82,9 @@ tracy-client = { workspace = true, features = [
     "system-tracing",
 ] }
 windows = { workspace = true, features = [] }
-pico-args = { workspace = true, features = ["eq-separator"] }
+
+[patch."https://github.com/cwfitzgerald/pacy"]
+pacy = { path = "../pacy/pacy" }
 
 [profile.release]
 debug = true

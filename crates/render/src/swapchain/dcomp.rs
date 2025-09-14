@@ -1,13 +1,14 @@
 use std::{
     collections::VecDeque,
-    ffi::c_void,
     mem, ptr,
     time::{Duration, Instant},
 };
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
+use egui::ahash::HashMap;
 use glam::UVec2;
+use pacy::drivers::{win11::DurationExt, TimeDriver};
 use windows::{
     core::Interface,
     Win32::{
@@ -20,7 +21,7 @@ use windows::{
             DirectComposition::*,
             Dxgi::{Common::*, *},
         },
-        System::{Threading::*, WindowsProgramming::QueryInterruptTime},
+        System::{Performance::QueryPerformanceCounter, Threading::*},
     },
 };
 
@@ -189,8 +190,6 @@ pub struct DCompSwapchain {
     buffers: ArrayVec<PresentationBuffer, BUFFER_COUNT>,
     supports_displayable_textures: bool,
 
-    frame_duration_100ns: u64,
-
     tracy_context: tracy_client::GpuContext,
     queries: VecDeque<Query>,
 
@@ -204,9 +203,12 @@ pub struct DCompSwapchain {
     present_index: u64,
     buffer_index: u64,
 
-    start_time: Option<u64>,
+    pacing: pacy::drivers::win11::Win11TimeDriver,
+    current_target: Duration,
+    previous_targets: HashMap<u64, Duration>,
+
+    start_time: Duration,
     previous_recorded_time: u64,
-    previous_wait_time: Instant,
 }
 
 impl DCompSwapchain {
@@ -226,7 +228,7 @@ impl DCompSwapchain {
             D3D11CreateDevice(
                 adapter,
                 D3D_DRIVER_TYPE_UNKNOWN,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 Some(&[D3D_FEATURE_LEVEL_11_1]),
                 D3D11_SDK_VERSION,
@@ -275,7 +277,7 @@ impl DCompSwapchain {
             log::info!("Initialized DComp device");
 
             let target = dcomp_device
-                .CreateTargetForHwnd(hwnd, TRUE)
+                .CreateTargetForHwnd(hwnd, true)
                 .context("Failed to create DComp target")?;
 
             let visual = dcomp_device.CreateVisual().context("Failed to create DComp visual")?;
@@ -296,7 +298,8 @@ impl DCompSwapchain {
             // Composition Swapchain
             //
 
-            let factory = create_presentation_factory(&d3d11_device)?;
+            let factory: IPresentationFactory = CreatePresentationFactory(&d3d11_device)
+                .context("Failed to create presentation factory")?;
 
             anyhow::ensure!(factory.IsPresentationSupported() == 1);
 
@@ -341,11 +344,9 @@ impl DCompSwapchain {
                 .SetLetterboxingMargins(0.0, 0.0, 0.0, 0.0)
                 .context("Failed to set letterboxing margins")?;
 
-            let retiring_fence = presentation_manager
-                .GetPresentRetiringFence(&ID3D11Fence::IID)
+            let retiring_fence: ID3D11Fence = presentation_manager
+                .GetPresentRetiringFence()
                 .context("Failed to get retiring event")?;
-            anyhow::ensure!(!retiring_fence.is_null(), "Retiring fence is null");
-            let retiring_fence = ID3D11Fence::from_raw(retiring_fence);
 
             let lost_event =
                 presentation_manager.GetLostEvent().context("Failed to get lost event")?;
@@ -382,7 +383,9 @@ impl DCompSwapchain {
 
             let present_index = presentation_manager.GetNextPresentId();
 
-            let frame_duration_100ns = (10_000_000.0 / target_frame_rate).round() as u64; // 100 ns units
+            let _frame_duration_100ns = (10_000_000.0 / target_frame_rate).round() as u64; // 100 ns units
+
+            let pacing = pacy::drivers::win11::Win11TimeDriver::new().unwrap();
 
             Ok(Self {
                 d3d11_device,
@@ -396,16 +399,17 @@ impl DCompSwapchain {
                 tracy_context,
                 queries: VecDeque::new(),
                 buffers,
-                frame_duration_100ns,
                 interop_state,
                 retiring_fence,
                 lost_event,
                 reset_event,
                 present_index,
                 buffer_index: 0,
-                start_time: None,
+                pacing,
+                current_target: Duration::ZERO,
+                previous_targets: HashMap::default(),
+                start_time: Duration::now_qpc(),
                 previous_recorded_time: 0,
-                previous_wait_time: Instant::now(),
             })
         }
     }
@@ -416,9 +420,7 @@ impl DCompSwapchain {
                 let id = stats.GetPresentId();
                 let kind = stats.GetKind();
 
-                let original_target = Duration::from_nanos(
-                    (self.start_time.unwrap() + self.frame_duration_100ns * id) * 100,
-                );
+                let original_target = *self.previous_targets.get(&id).unwrap_or(&Duration::ZERO);
 
                 #[allow(non_upper_case_globals)]
                 match kind {
@@ -454,10 +456,9 @@ impl DCompSwapchain {
 
                         let mut target_stats = [COMPOSITION_TARGET_STATS::default(); 8];
                         for i in 0..target_id_count as usize {
-                            DCompositionGetTargetStatistics(
+                            target_stats[i] = DCompositionGetTargetStatistics(
                                 composition_frame_id,
                                 &target_ids[i],
-                                &mut target_stats[i],
                             )
                             .unwrap();
                         }
@@ -475,7 +476,7 @@ impl DCompSwapchain {
                         };
 
                         let xadapter = if display_instance_array[0].requiredCrossAdapterCopy == 1 {
-                            "(cross-adapter)"
+                            " (cross-adapter)"
                         } else {
                             ""
                         };
@@ -486,10 +487,10 @@ impl DCompSwapchain {
                         let comp_frequency = Duration::from_nanos(frame_stats.framePeriod * 100);
 
                         let no_iflip =
-                            if self.supports_displayable_textures { "" } else { " (no iFlip)" };
+                            if self.supports_displayable_textures { " " } else { " (no iFlip) " };
 
                         log::info!(
-                            "Presentation {}: CompFrame: {} {xadapter}{no_iflip}\
+                            "Presentation {}: CompFrame: {}{xadapter}{no_iflip}\
                              Sch: {original_target:?} Tar: {target_time:?} (diff {diff}), \
                              Delta Tar: {:?}, VBlank: {:?}, Comp Feq: {:?}",
                             id,
@@ -577,45 +578,60 @@ impl Swapchain for DCompSwapchain {
     }
 
     fn acquire(&mut self) {
-        if self.start_time.is_none() {
-            self.start_time = Some(get_interrupt_time());
-        }
-
         unsafe {
-            let target_time =
-                self.start_time.unwrap() + self.frame_duration_100ns * self.present_index; // 16.667 ms in 100 ns units
+            log::info!("----------------------------------------");
+            log::info!("Acquiring frame {}", self.present_index);
 
-            // let duration_until_target: Duration =
-            //     Duration::from_nanos(target_time.saturating_sub(now).saturating_mul(100));
+            let future_presents = self.pacing.next_presentation();
 
-            // log::info!(
-            //     "Starting frame {} with buffer {} and target time {} ({duration_until_target:?} from now)",
-            //     self.present_index,
-            //     self.buffer_index,
-            //     target_time
-            // );
-            // log::info!("- Now: {}", now);
+            log::info!("Current time: {:?}", future_presents.now - self.start_time);
+            log::info!(
+                "Soonest presentation: {:?}",
+                future_presents.soonest_presentation - self.start_time
+            );
+            log::info!("Display interval: {:?}", future_presents.display_interval.interval);
 
-            self.presentation_manager
-                .SetTargetTime(SystemInterruptTime { value: target_time })
-                .unwrap();
+            let previous_target = if self.current_target.is_zero() {
+                future_presents.now
+            } else {
+                self.current_target
+            };
+
+            let frame_now = future_presents.now.max(previous_target);
+
+            let estimated_frame_time = Duration::from_millis(2);
+
+            let target_time = future_presents
+                .soonest_presentation_after(frame_now + estimated_frame_time)
+                .saturating_sub(Duration::from_micros(250));
+            log::info!(
+                "Next frame target: {:?} (delta {:?})",
+                target_time - self.start_time,
+                target_time - previous_target
+            );
+            self.previous_targets.insert(self.present_index - 1, previous_target);
+            self.current_target = target_time;
+
+            let time_from_now = target_time
+                .saturating_sub(estimated_frame_time)
+                .saturating_sub(Duration::now_qpc());
+            // log::info!("Current time {:?}", Duration::now_qpc() - self.start_time);
+            // log::info!("Sleeping for {:?}", time_from_now);
+
+            spin_sleep::sleep(time_from_now);
+
+            let now2 = Duration::now_qpc();
+            log::info!("Woke up, time now {:?}", now2 - self.start_time);
+            log::info!("Time until target: {:?}", target_time.saturating_sub(now2));
+
+            // self.presentation_manager
+            //     .SetTargetTime(SystemInterruptTime { value: target_time.to_qpc() })
+            //     .unwrap();
 
             let buffer = &mut self.buffers[self.buffer_index as usize];
             let previous_present_id = buffer.previous_present_id;
 
             self.wait_for_present(previous_present_id);
-
-            let now = Instant::now();
-            let previous_wait_time = self.previous_wait_time;
-            self.previous_wait_time = now;
-
-            let diff = now.duration_since(previous_wait_time);
-
-            log::info!(
-                "Waited {:?} since last acquire (should be ~{:?})",
-                diff,
-                Duration::from_nanos(self.frame_duration_100ns * 100)
-            );
 
             self.display_stats();
 
@@ -649,14 +665,19 @@ impl Swapchain for DCompSwapchain {
             self.queries.push_back(query);
 
             self.presentation_surface.SetBuffer(&buffer.buffer).unwrap();
-            self.presentation_manager
-                .SetPreferredPresentDuration(
-                    SystemInterruptTime { value: self.frame_duration_100ns },
-                    SystemInterruptTime { value: 0 },
-                )
-                .unwrap();
+            // self.presentation_manager
+            //     .SetPreferredPresentDuration(
+            //         SystemInterruptTime { value: 160_000 },
+            //         SystemInterruptTime { value: 0 },
+            //     )
+            //     .unwrap();
 
             self.presentation_manager.Present().unwrap();
+
+            log::info!(
+                "Time until target after present: {:?}",
+                self.current_target.saturating_sub(Duration::now_qpc())
+            );
 
             self.d3d11_context
                 .Signal(&self.interop_state.d11_12_fence.fence11, self.present_index)
@@ -686,7 +707,7 @@ impl DCompSwapchain {
             ResetEvent(*self.reset_event).unwrap();
             self.retiring_fence.SetEventOnCompletion(id, *self.reset_event).unwrap();
             let wait_handles = [self.lost_event, *self.reset_event];
-            let wait_result = WaitForMultipleObjects(&wait_handles, FALSE, INFINITE);
+            let wait_result = WaitForMultipleObjects(&wait_handles, false, INFINITE);
 
             if wait_result == WAIT_OBJECT_0 {
                 panic!("Lost event");
@@ -711,25 +732,13 @@ impl DCompSwapchain {
                 return true;
             };
 
-            query.tracy_query.take().unwrap().upload_timestamp(start as i64, end as i64);
+            let tq = query.tracy_query.take().unwrap();
+
+            tq.upload_timestamp_start(start as i64);
+            tq.upload_timestamp_end(end as i64);
+
             false
         });
-    }
-}
-
-fn create_presentation_factory(
-    d3d11_device: &ID3D11Device,
-) -> Result<IPresentationFactory, anyhow::Error> {
-    unsafe {
-        let mut presentation_factory: *mut c_void = std::ptr::null_mut();
-        CreatePresentationFactory(
-            d3d11_device,
-            &IPresentationFactory::IID,
-            &mut presentation_factory as *mut *mut _ as *mut *mut c_void,
-        )
-        .context("Failed to create presentation factory")?;
-        anyhow::ensure!(!presentation_factory.is_null(), "Presentation factory is null");
-        Ok(IPresentationFactory::from_raw(presentation_factory))
     }
 }
 
@@ -779,6 +788,10 @@ fn create_texture(
     }
 }
 
-fn get_interrupt_time() -> u64 {
-    unsafe { QueryInterruptTime() }
+fn current_time() -> u64 {
+    let mut time = 0;
+    unsafe {
+        QueryPerformanceCounter(&mut time).unwrap();
+    }
+    time as u64
 }
